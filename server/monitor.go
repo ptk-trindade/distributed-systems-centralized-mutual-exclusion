@@ -7,16 +7,21 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+type QueueElement struct {
+	processId    string
+	handlerGrant *semaphore.Weighted
+}
+
 type Monitor struct {
 	mtxQueue        sync.Mutex
 	mtxAttCnt       sync.Mutex
 	requestQueue    []QueueElement
 	attendanceCount map[string]int
-	semaphore       *semaphore.Weighted
-	releaseChan     chan bool
-
-	ctx       context.Context
-	cancelCtx context.CancelFunc
+	queueSem        *semaphore.Weighted
+	releaseSem      *semaphore.Weighted
+	wg              sync.WaitGroup
+	ctx             context.Context
+	cancelCtx       context.CancelFunc
 }
 
 func createMonitor() *Monitor {
@@ -24,14 +29,17 @@ func createMonitor() *Monitor {
 	attendanceCount := make(map[string]int)
 	queueSem := semaphore.NewWeighted(100) // 100 is the number of processes that can be in the queue at the same time
 	queueSem.Acquire(context.Background(), 100)
-	release := make(chan bool)
+
+	releaseSem := semaphore.NewWeighted(1)
+	releaseSem.Acquire(context.Background(), 1)
+
 	ctx, cancelCtx := context.WithCancel(context.Background())
 
 	monitor := &Monitor{
 		requestQueue:    requestQueue,
 		attendanceCount: attendanceCount,
-		semaphore:       queueSem,
-		releaseChan:     release,
+		queueSem:        queueSem,
+		releaseSem:      releaseSem,
 		ctx:             ctx,
 		cancelCtx:       cancelCtx,
 	}
@@ -41,16 +49,16 @@ func createMonitor() *Monitor {
 
 // --- QUEUE ---
 // called by handler when a request is received from a client
-func (monitor *Monitor) sendRequest(processId string, handlerGrant chan bool) {
+func (monitor *Monitor) sendRequest(processId string, handlerGrant *semaphore.Weighted) {
 	monitor.mtxQueue.Lock()
 	monitor.requestQueue = append(monitor.requestQueue, QueueElement{processId, handlerGrant})
 	monitor.mtxQueue.Unlock()
-	monitor.semaphore.Release(1)
+	monitor.queueSem.Release(1)
 }
 
 // called by controller when "critical section" is free
 func (monitor *Monitor) receiveRequest() (QueueElement, error) {
-	err := monitor.semaphore.Acquire(context.Background(), 1)
+	err := monitor.queueSem.Acquire(context.Background(), 1)
 	if err != nil {
 		return QueueElement{}, err
 	}
@@ -97,21 +105,4 @@ func (monitor *Monitor) getAttendanceCount() map[string]int {
 	monitor.mtxAttCnt.Unlock()
 
 	return copiedMap
-}
-
-// --- RELEASE ---
-// called by handler when client finishes using critical section
-func (monitor *Monitor) sendRelease() {
-	monitor.releaseChan <- true
-}
-
-// called by controller when waiting for a handler to finish
-func (monitor *Monitor) receiveRelease() {
-	<-monitor.releaseChan
-}
-
-// --- STOP MONITOR ---
-// called by main when the program is closed
-func (monitor *Monitor) exit() {
-	monitor.cancelCtx()
 }

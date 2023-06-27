@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"golang.org/x/sync/semaphore"
 )
 
 func Server(monitor *Monitor) {
@@ -34,10 +36,15 @@ func Server(monitor *Monitor) {
 // ----- LOCAL FUNCTIONS ------
 
 func handleConnection(conn net.Conn, monitor *Monitor) {
+	monitor.wg.Add(1)
+	defer monitor.wg.Done()
+
 	defer conn.Close()
 	defer fmt.Println("Closing connection...")
 
-	criticalSection := false
+	handlerGrant := semaphore.NewWeighted(1)
+	handlerGrant.Acquire(monitor.ctx, 1)
+
 	for {
 		msgReceived, err := readFromClient(conn)
 		if err != nil {
@@ -57,13 +64,15 @@ func handleConnection(conn net.Conn, monitor *Monitor) {
 		switch code {
 		case "1": // REQUEST
 			fmt.Println("Process", processId, "requested critical section")
-			handlerGrant := make(chan bool)
 			monitor.sendRequest(processId, handlerGrant)
 
-			<-handlerGrant // wait for the controller to signal that the process can continue
+			err = handlerGrant.Acquire(monitor.ctx, 1)
+			if err != nil { // server closed
+				fmt.Println("Server closed")
+				return
+			}
 
-			criticalSection = true
-			err := sendToClient(conn, "GRANT") // TODO: Change message
+			err = sendToClient(conn, "GRANT") // TODO: Change message
 			if err != nil {
 				fmt.Println("Error sending to client:", err)
 				continue
@@ -75,14 +84,9 @@ func handleConnection(conn net.Conn, monitor *Monitor) {
 
 		case "3": // RELEASE
 			fmt.Println("Process", processId, "released critical section")
-			monitor.sendRelease()
-			criticalSection = false
+			monitor.releaseSem.Release(1)
 
 		case "9": // exit
-			if criticalSection {
-				monitor.sendRelease()
-			}
-
 			fmt.Println("Process", processId, "exited")
 			return
 

@@ -4,15 +4,11 @@ import (
 	"fmt"
 )
 
-type QueueElement struct {
-	processId    string
-	handlerGrant chan bool
-}
-
 func main() {
 
 	monitor := createMonitor()
 	go Controller(monitor)
+	go Server(monitor)
 
 	// wait for a keypress to close the program
 	var input string
@@ -41,11 +37,13 @@ func main() {
 
 		case "3":
 			fmt.Println("Exiting...")
-			monitor.exit()
 
 		default:
 			fmt.Println("Invalid option")
 		}
 	}
+
+	monitor.cancelCtx()
+	monitor.wg.Wait()
 
 }
