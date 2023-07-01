@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
-
-	"golang.org/x/sync/semaphore"
+	"sync"
 )
 
-func Server(monitor *Monitor) {
+func Server(mutexLog *MutexLog, wg *sync.WaitGroup) {
 	// listen on port 8080
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
@@ -29,88 +28,96 @@ func Server(monitor *Monitor) {
 			continue
 		}
 
-		go handleConnection(conn, monitor)
+		go handleConnection(conn, mutexLog, wg)
 	}
 }
 
 // ----- LOCAL FUNCTIONS ------
 
-func handleConnection(conn net.Conn, monitor *Monitor) {
-	monitor.wg.Add(1)
-	defer monitor.wg.Done()
+func handleConnection(conn net.Conn, mutexLog *MutexLog, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
 
 	defer conn.Close()
 	defer fmt.Println("Closing connection...")
 
-	handlerGrant := semaphore.NewWeighted(1)
-	handlerGrant.Acquire(monitor.ctx, 1)
-
-	for {
-		msgReceived, err := readFromClient(conn)
+	pid, err := receiveRequest(conn)
+	fmt.Println("Received request from", pid)
+	for err == nil {
+		err = mutexLog.Lock(pid)
 		if err != nil {
-			fmt.Println("Error reading from client:", err)
+			sendToClient(conn, "CLOSE")
 			return
 		}
+		sendToClient(conn, "GRANT")
 
-		msgSplit := strings.Split(msgReceived, "|")
-		if len(msgSplit) < 2 {
-			fmt.Println("Error: invalid message received", msgReceived)
-			continue
-		}
+		receiveRelease(conn) // wait for client to release
 
-		code := msgSplit[0]
-		processId := msgSplit[1]
+		mutexLog.Unlock()
 
-		switch code {
-		case "1": // REQUEST
-			fmt.Println("Process", processId, "requested critical section")
-			monitor.sendRequest(processId, handlerGrant)
-
-			err = handlerGrant.Acquire(monitor.ctx, 1)
-			if err != nil { // server closed
-				fmt.Println("Server closed")
-				return
-			}
-
-			err = sendToClient(conn, "GRANT") // TODO: Change message
-			if err != nil {
-				fmt.Println("Error sending to client:", err)
-				continue
-			}
-
-			fmt.Println("Process", processId, "entered critical section")
-
-		// 2 -> GRANT
-
-		case "3": // RELEASE
-			fmt.Println("Process", processId, "released critical section")
-			monitor.releaseSem.Release(1)
-
-		case "9": // exit
-			fmt.Println("Process", processId, "exited")
-			return
-
-		default:
-			fmt.Println("Error: invalid code received", code)
-
-		}
+		pid, err = receiveRequest(conn)
 	}
-
 }
 
-func readFromClient(conn net.Conn) (string, error) {
-	byteSlice := make([]byte, 20)
-	_, err := conn.Read(byteSlice)
+func receiveRequest(conn net.Conn) (string, error) {
+
+	msgTuple, err := readFromClient(conn)
 	if err != nil {
 		return "", err
 	}
 
-	return string(byteSlice), err
+	code := msgTuple[0]
+	processId := msgTuple[1]
+
+	if code != "1" {
+		return "", fmt.Errorf("error: invalid code received %s", code)
+	}
+
+	return processId, nil
+}
+
+func receiveRelease(conn net.Conn) error {
+
+	msgTuple, err := readFromClient(conn)
+	if err != nil {
+		return err
+	}
+
+	code := msgTuple[0]
+	if code != "3" {
+		return fmt.Errorf("error: invalid code received %s", code)
+	}
+
+	return nil
+}
+
+// CLIENT READ/SEND FUNCTIONS
+
+func readFromClient(conn net.Conn) ([2]string, error) {
+	var msgTuple [2]string
+
+	byteSlice := make([]byte, 20)
+	_, err := conn.Read(byteSlice)
+	if err != nil {
+		return msgTuple, err
+	}
+
+	msg := string(byteSlice)
+	fmt.Println("readFromClient:", msg)
+	msgSplit := strings.Split(msg, "|")
+
+	if len(msgSplit) < 2 {
+		return msgTuple, fmt.Errorf("error: invalid message received %s", msg)
+	}
+
+	msgTuple = [2]string{msgSplit[0], msgSplit[1]}
+
+	return msgTuple, err
 }
 
 func sendToClient(conn net.Conn, response string) error {
 	if len(response) != 5 {
-		return fmt.Errorf("error: text must be 20 characters long")
+		return fmt.Errorf("error: text must be 5 characters long")
 	}
 
 	var buf bytes.Buffer

@@ -2,13 +2,15 @@ package main
 
 import (
 	"fmt"
+	"sync"
 )
 
 func main() {
 
-	monitor := createMonitor()
-	go Controller(monitor)
-	go Server(monitor)
+	mutexLog := CreateMutexLog()
+	var wg sync.WaitGroup
+	// go Controller(monitor)
+	go Server(mutexLog, &wg)
 
 	// wait for a keypress to close the program
 	var input string
@@ -19,31 +21,39 @@ func main() {
 		fmt.Println("3. Exit")
 		fmt.Scanln(&input)
 
-		switch input {
-		case "1":
+		if input == "3" {
+			break
+		}
+
+		if input == "1" {
 			fmt.Println("Current Requests Queue")
-			requestQueue := monitor.getRequestQueue()
+			requestQueue := mutexLog.GetQueue()
 
 			for _, v := range requestQueue {
-				fmt.Printf("Process %s\n", v.processId)
+				fmt.Printf("Process %s\n", v.(string))
 			}
 
-		case "2":
+		} else if input == "2" {
 			fmt.Println("How many requests per process have been attended")
-			attendanceCount := monitor.getAttendanceCount()
-			for k, v := range attendanceCount {
+			history := mutexLog.GetHistory()
+
+			attdCount := make(map[string]int)
+
+			for _, v := range history {
+				attdCount[v.(string)]++
+			}
+
+			for k, v := range attdCount {
 				fmt.Printf("Process %s: %d\n", k, v)
 			}
 
-		case "3":
-			fmt.Println("Exiting...")
-
-		default:
+		} else {
 			fmt.Println("Invalid option")
 		}
+
 	}
 
-	monitor.cancelCtx()
-	monitor.wg.Wait()
-
+	mutexLog.Cancel()
+	fmt.Println("Ctx cancelled")
+	wg.Wait()
 }
