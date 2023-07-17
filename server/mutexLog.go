@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 
@@ -62,7 +63,7 @@ func (mutex *MutexLog) Lock(identifier any) error {
 	sem := semaphore.NewWeighted(1)
 	sem.Acquire(mutex.ctx, 1) // make semafore unavailable
 
-	mutex.requestQueue = append(mutex.requestQueue, QueueElement{identifier, semaphore.NewWeighted(1)})
+	mutex.requestQueue = append(mutex.requestQueue, QueueElement{identifier, sem})
 	mutex.mtx.Unlock()
 
 	err = sem.Acquire(mutex.ctx, 1) // wait for turn
@@ -84,7 +85,7 @@ func (mutex *MutexLog) Unlock() {
 
 	if len(mutex.requestQueue) > 0 { // someone is waiting
 		element := mutex.requestQueue[0]
-
+		fmt.Println("release:", element.identifier)
 		element.turnSem.Release(1)
 		mutex.history = append(mutex.history, element.identifier)
 
@@ -106,7 +107,7 @@ func (mutex *MutexLog) GetQueue() []any {
 
 	copiedQueue := make([]any, len(mutex.requestQueue))
 	for i, v := range mutex.requestQueue {
-		copiedQueue[i] = v
+		copiedQueue[i] = v.identifier
 	}
 
 	mutex.mtx.Unlock()
