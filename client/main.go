@@ -30,34 +30,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	pid := os.Getpid()
+
 	// create a new mutex server
-	mutexServer, err := createMutexServer()
+	mutexServer, err := createMutexServer("localhost:8080", pid)
 	if err != nil {
 		fmt.Println("Error creating mutex server:", err)
 		return
 	}
 
-	pid := os.Getpid()
+	defer mutexServer.Close()
+
 	for i := 0; i < r; i++ {
 		fmt.Println("Request: ", i)
 
-		err := mutexServer.Lock()
+		err = mutexServer.Lock()
 		if err != nil {
 			fmt.Println("Error locking mutex:", err)
 			return
 		}
 
 		// WRITE TO FILE
-		_, err = os.Stat(FILEPATH)
+		const filepath = "resultado.txt"
+		_, err = os.Stat(filepath)
 		if os.IsNotExist(err) {
 			fmt.Println("creating file")
-			createFile(FILEPATH)
+			createFile(filepath)
 		}
 
 		fmt.Println("writing to file")
 		currentTime := time.Now()
 		txt := fmt.Sprintf("%06d | %s\n", pid, currentTime.Format("15:04:05.000"))
-		appendToFile(FILEPATH, txt)
+		appendToFile(filepath, txt)
 
 		time.Sleep(time.Duration(k) * time.Second)
 
@@ -69,7 +73,4 @@ func main() {
 			return
 		}
 	}
-
-	// CLOSE
-	mutexServer.Close()
 }

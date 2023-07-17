@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"os"
 )
 
 const REQUEST = 1
@@ -16,15 +15,12 @@ type mutexServer struct {
 	pid  int
 }
 
-func createMutexServer() (*mutexServer, error) {
-	conn, err := net.Dial("tcp", "localhost:8080")
+func createMutexServer(ip string, pid int) (*mutexServer, error) {
+	conn, err := net.Dial("tcp", ip)
 	if err != nil {
 		err := fmt.Errorf("error connecting to server: %s", err)
 		return nil, err
 	}
-
-	pid := os.Getpid()
-	// pid := fmt.Sprintf("%06d", pid_int)
 
 	mutexServer := &mutexServer{
 		conn: conn,
